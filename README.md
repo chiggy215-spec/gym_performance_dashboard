@@ -1,19 +1,21 @@
-# 🎈 Blank app template
+Project Overview
+This project simulates a data analytics dashboard for a fictional
+fitness company operating 19 gyms across 4 districts and 2 regions.
 
-A simple Streamlit app template for you to modify!
+The dashboard tracks:
+• Progress toward a 10% summer membership growth goal
+• Personal training session sales performance
+• Improvement in PT conversion after employee training
 
-[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://blank-app-template.streamlit.app/)
+Tools Used
+Python
+Pandas
+Streamlit
+Plotly
+GitHub
 
-### How to run it on your own machine
-
-1. Install the requirements
-
-   ```
-   $ pip install -r requirements.txt
-   ```
-
-2. Run the app
-
-   ```
-   $ streamlit run streamlit_app.py
-   ```
+Metrics
+Membership Growth
+Goal Progress
+Personal Training Conversion Rate
+Year-over-Year Performance
