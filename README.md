@@ -89,6 +89,6 @@ Running the Dashboard
 3.	Run the Streamlit application:
   streamlit run streamlit_app.py
 
-Author
+
 This project was developed as part of a gym performance analytics initiative to help leadership monitor operational performance and sales activity across multiple locations.
 
