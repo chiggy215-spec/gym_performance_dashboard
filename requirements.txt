@@ -5,3 +5,4 @@ plotly
 streamlit-autorefresh
 numpy
 LinearRegression
+scikit-learn
