@@ -1,25 +1,31 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+from datetime import timedelta
 from streamlit_autorefresh import st_autorefresh
-from datetime import datetime
 
 # ------------------------------
+# AUTO REFRESH (Daily)
+# ------------------------------
+
+st_autorefresh(interval=24*60*60*1000, key="daily_refresh")
+
+# --------------------------------------------------
 # PAGE CONFIG
-# ------------------------------
-st.set_page_config(page_title="Gym Performance Dashboard", layout="wide")
-st.title("Gym Performance Dashboard")
-st.write("Tracking New Gym Memberships and PT Sales Summer Goals")
-# ------------------------------
-# AUTO REFRESH
-# ------------------------------
-# Refresh once every 24 hours (in milliseconds)
-count = st_autorefresh(interval=24*60*60*1000, key="dailyrefresh")
+# --------------------------------------------------
+st.set_page_config(
+    page_title="Gym Performance Dashboard",
+    layout="wide"
+)
 
-# ------------------------------
+st.title("Gym Performance Dashboard")
+st.write("Tracking New Gym Memberships and PT Sales Summer Goals (June–August)")
+
+# --------------------------------------------------
 # LOAD DATA
-# ------------------------------
+# --------------------------------------------------
 @st.cache_data
 def load_data():
     url = "https://raw.githubusercontent.com/chiggy215-spec/gym_performance_dashboard/main/data/Dashboard%20Exercise%20Data.xlsx"
@@ -30,357 +36,578 @@ def load_data():
 
 df = load_data()
 
-# ------------------------------
-# FILTER NEW MEMBERS
-# ------------------------------
 df_new = df[df["cust_type"] == "NEW"].copy()
 
-current_year = df_new["start_dt"].dt.year.max()
-prior_year = current_year - 1
+# --------------------------------------------------
+# FILTERS
+# --------------------------------------------------
+st.sidebar.header("Filters")
 
-# ------------------------------
-# DETERMINE DYNAMIC CUTOFF DATE
-# ------------------------------
-latest_current_date = df_new[df_new["start_dt"].dt.year == current_year]["start_dt"].max()
+regions = ["All"] + sorted(df_new["region"].dropna().unique().tolist())
+districts = ["All"] + sorted(df_new["district"].dropna().unique().tolist())
+gyms = ["All"] + sorted(df_new["store_nbr"].dropna().unique().tolist())
 
-cutoff_month = latest_current_date.month
-cutoff_day = latest_current_date.day
+selected_region = st.sidebar.selectbox("Region", regions)
+filtered_df = df_new.copy()
+if selected_region != "All":
+    filtered_df = filtered_df[filtered_df["region"] == selected_region]
 
-# ------------------------------
-# SUMMER DATE MASK (6/1 → dynamic cutoff)
-# ------------------------------
-summer_period_mask = (
-    (df_new["start_dt"].dt.month >= 6) &
-    (
-        (df_new["start_dt"].dt.month < cutoff_month) |
-        (
-            (df_new["start_dt"].dt.month == cutoff_month) &
-            (df_new["start_dt"].dt.day <= cutoff_day)
-        )
-    )
+available_districts = ["All"] + sorted(filtered_df["district"].dropna().unique().tolist())
+selected_district = st.sidebar.selectbox("District", available_districts)
+if selected_district != "All":
+    filtered_df = filtered_df[filtered_df["district"] == selected_district]
+
+available_gyms = ["All"] + sorted(filtered_df["store_nbr"].dropna().unique().tolist())
+selected_gym = st.sidebar.selectbox("Gym", available_gyms)
+if selected_gym != "All":
+    filtered_df = filtered_df[filtered_df["store_nbr"] == selected_gym]
+
+min_date = filtered_df["start_dt"].min()
+max_date = filtered_df["start_dt"].max()
+start_date, end_date = st.sidebar.date_input(
+    "Date Range",
+    [min_date, max_date],
+    min_value=min_date,
+    max_value=max_date
 )
+filtered_df = filtered_df[(filtered_df["start_dt"] >= pd.Timestamp(start_date)) &
+                          (filtered_df["start_dt"] <= pd.Timestamp(end_date))]
 
-# ------------------------------
-# TREND DATA (ALL DATES)
-# ------------------------------
-df_new_trend = df_new.groupby("start_dt").size().reset_index(name="count")
-
-# ------------------------------
-# DYNAMIC TIME FRAME
-# ------------------------------
-df_new_summer_current = df_new[
-    (df_new["start_dt"].dt.year == current_year) &
-    summer_period_mask
-]
-
-df_new_summer_prior = df_new[
-    (df_new["start_dt"].dt.year == prior_year) &
-    summer_period_mask
-]
-
-# ------------------------------
-# CALCULATED FIELDS FUNCTION
-# ------------------------------
+# --------------------------------------------------
+# HELPER FUNCTIONS
+# --------------------------------------------------
 def calc_summary(df_current, df_prior, group_field):
-
-    curr = df_current.groupby(group_field).size().reset_index(name="current")
-    prior = df_prior.groupby(group_field).size().reset_index(name="prior")
-
-    merged = pd.merge(prior, curr, on=group_field, how="outer").fillna(0)
-
-    merged["prior"] = merged["prior"].astype(int)
+    # Current totals
+    curr = (df_current
+        .groupby(group_field)
+        .size()
+        .reset_index(name="current"))
+    prior = (df_prior
+        .groupby(group_field)
+        .size()
+        .reset_index(name="prior"))
+    merged = pd.merge(curr, prior, on=group_field, how="outer").fillna(0)
     merged["current"] = merged["current"].astype(int)
-
-    # Target = 10% above prior year
-    merged["target"] = merged["prior"] * 1.10
-
-    # Color logic for charts
-    def color_logic(row):
-
-        target = row["target"]
-        yellow_threshold = target * 0.9
-
-        if row["current"] >= target:
-            return "green"
-        elif row["current"] >= yellow_threshold:
-            return "yellow"
-        else:
-            return "red"
-
-    merged["color"] = merged.apply(color_logic, axis=1)
+    merged["prior"] = merged["prior"].astype(int)
+    merged["target"] = (merged["prior"] * 1.10).round().astype(int)
+    merged["performance_pct"] = merged["current"] / merged["target"]
     return merged
 
+def summer_projection(df_current, df_prior):
+    summer_start_current = pd.Timestamp(f"{df_current['start_dt'].dt.year.max()}-06-01")
+    summer_end_current = pd.Timestamp(f"{df_current['start_dt'].dt.year.max()}-08-31")
+    summer_start_prior = summer_start_current.replace(year=summer_start_current.year-1)
+    summer_end_prior = summer_end_current.replace(year=summer_end_current.year-1)
+    
+    df_current_summer = df_current[(df_current["start_dt"] >= summer_start_current) &
+                                   (df_current["start_dt"] <= df_current["start_dt"].max())]
+    df_prior_summer = df_prior[(df_prior["start_dt"] >= summer_start_prior) &
+                               (df_prior["start_dt"] <= summer_end_prior)]
+    
+    # Projection based on days elapsed
+    days_elapsed = (df_current_summer["start_dt"].max() - summer_start_current).days + 1
+    prior_to_date = df_prior_summer[df_prior_summer["start_dt"] <= summer_start_prior + timedelta(days=days_elapsed)].shape[0]
+    prior_full_total = df_prior_summer.shape[0]
+    current_total = df_current_summer.shape[0]
+    
+    percent_complete = prior_to_date / prior_full_total if prior_full_total > 0 else 1
+    projected_total = int(current_total / percent_complete)
+    target_total = int(prior_full_total * 1.10)
+    variance = projected_total - target_total
+    
+    return projected_total, variance, target_total
 
-# ------------------------------
-# SUMMARY TABLES
-# ------------------------------
-gym_summary = calc_summary(df_new_summer_current, df_new_summer_prior, "store_nbr")
-district_summary = calc_summary(df_new_summer_current, df_new_summer_prior, "district")
-region_summary = calc_summary(df_new_summer_current, df_new_summer_prior, "region")
+def build_leaderboard(summary_df, group_field, display_name, top_n=10):
+    df_lb = summary_df.copy()
+    df_lb = df_lb.sort_values("performance_pct", ascending=False).head(top_n)
+    df_lb["Performance %"] = (df_lb["performance_pct"]*100).round(1).astype(str) + "%"
+    return df_lb[[group_field, "prior", "current", "target", "Performance %"]].rename(columns={group_field: display_name, "prior":"Prior Year","current":"Current Year","target":"Target"})
 
-# ------------------------------
-# TOP KPI TILES
-# ------------------------------
-st.header("Top Metrics (6/1-8/31)")
-col1, col2, col3 = st.columns(3)
-col1.metric("Current Year New Members", int(df_new_summer_current.shape[0]))
-col2.metric("Target New Members Through Date", int(df_new_summer_prior.shape[0]*1.10))
-col3.metric("Prior Year New Members Through Date", int(df_new_summer_prior.shape[0]))
+def cumulative_growth(df, value_col="count"):
+    df_copy = df.copy()
+    df_copy["year"] = df_copy["start_dt"].dt.year
+    df_copy = df_copy.sort_values("start_dt")
+    df_copy["cumulative"] = df_copy.groupby("year").cumcount()+1 if value_col=="count" else df_copy.groupby("year")[value_col].cumsum()
+    return df_copy
 
-# ------------------------------
-# TOP PERFORMERS LEADERBOARDS
-# ------------------------------
-st.subheader("Top Performing Units (Leaderboards)")
+# --------------------------------------------------
+# CALCULATE SUMMER DATA
+# --------------------------------------------------
+current_year = filtered_df["start_dt"].dt.year.max()
+prior_year = current_year - 1
 
-col1, col2, col3 = st.columns(3)
+summer_start_current = pd.Timestamp(f"{current_year}-06-01")
+summer_start_prior = pd.Timestamp(f"{prior_year}-06-01")
+summer_end_prior = pd.Timestamp(f"{prior_year}-08-31")
 
+df_current_summer = filtered_df[(filtered_df["start_dt"] >= summer_start_current)]
+df_prior_summer = df_new[(df_new["start_dt"] >= summer_start_prior) & (df_new["start_dt"] <= summer_end_prior)]
 
-def build_leaderboard(df, group_field, display_name):
+gym_summary = calc_summary(df_current_summer, df_prior_summer, "store_nbr")
+district_summary = calc_summary(df_current_summer, df_prior_summer, "district")
+region_summary = calc_summary(df_current_summer, df_prior_summer, "region")
 
-    leaderboard = df.copy()
+projected_total, variance, target_total = summer_projection(df_current_summer, df_prior_summer)
 
-    leaderboard["performance_pct"] = leaderboard["current"] / leaderboard["target"]
+# --------------------------------------------------
+# ROW 1: KPIs
+# --------------------------------------------------
+st.header("Key Metrics (June–August)")
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Current Members", f"{df_current_summer.shape[0]:,}")
+col2.metric("Summer Target", f"{target_total:,}")
+col3.metric("Projected Total", f"{projected_total:,}")
+col4.metric("Projected Variance", f"{variance:,}", delta=f"{variance:,}", delta_color="inverse" if variance >=0 else "normal")
 
-    leaderboard = leaderboard[leaderboard["current"] >= leaderboard["target"]]
+# --------------------------------------------------
+# ROW 2: Primary Visuals (Goal Gauge + Cumulative Growth)
+# --------------------------------------------------
+col1, col2 = st.columns(2)
 
-    leaderboard = leaderboard.sort_values("performance_pct", ascending=False)
-
-    leaderboard = leaderboard[[group_field, "prior", "current", "target", "performance_pct"]]
-
-    leaderboard = leaderboard.rename(columns={
-        group_field: display_name,
-        "prior": "Prior Year",
-        "current": "Current Year",
-        "target": "Target",
-        "performance_pct": "Performance %"
-    })
-
-    leaderboard["Performance %"] = (leaderboard["Performance %"] * 100).round(1).astype(str) + "%"
-
-    return leaderboard
-
-
-gym_leaderboard = build_leaderboard(gym_summary, "store_nbr", "Gym")
-district_leaderboard = build_leaderboard(district_summary, "district", "District")
-region_leaderboard = build_leaderboard(region_summary, "region", "Region")
-
-
+# Goal Gauge
 with col1:
-    st.metric("Gyms Exceeding Target", gym_leaderboard.shape[0])
-    st.dataframe(gym_leaderboard, use_container_width=True, hide_index=True)
 
+    current_value = df_current_summer.shape[0]
+
+    fig_gauge = go.Figure(go.Indicator(
+        mode="gauge+number+delta",
+        value=current_value,
+        number={
+            'valueformat': ',',
+            'font': {'size': 32}},
+        title={
+            'text': "Summer Goal Progress",
+            'font': {'size': 20}},
+        gauge={
+            'axis': {
+                'range': [0, max(target_total * 1.2, current_value)],
+                'tickformat': ","},
+            'bar': {
+                'color': "#3B82F6",   # clean dashboard blue
+                'thickness': 0.5},
+            'bgcolor': "white",
+            'borderwidth': 2,
+            'bordercolor': "#CBCCCE",
+            'threshold': {
+                'line': {
+                    'color': "#111827",
+                    'width': 4},
+                'thickness': 0.75,
+                'value': target_total}}))
+
+    # Label the target on the gauge
+    fig_gauge.add_annotation(
+        x=0.5,
+        y=0.15,
+        text=f"Summer Target: {target_total:,}",
+        showarrow=False,
+        font=dict(size=14))
+
+    st.plotly_chart(fig_gauge, width='stretch')
+
+# Cumulative Growth
 with col2:
-    st.metric("Districts Exceeding Target", district_leaderboard.shape[0])
-    st.dataframe(district_leaderboard, use_container_width=True, hide_index=True)
 
-with col3:
-    st.metric("Regions Exceeding Target", region_leaderboard.shape[0])
-    st.dataframe(region_leaderboard, use_container_width=True, hide_index=True)
+    df_overlay = filtered_df.copy()
+    # Keep only current year and prior year
+    current_year = df_overlay["start_dt"].dt.year.max()
+    prior_year = current_year - 1
+    df_overlay = df_overlay[df_overlay["start_dt"].dt.year.isin([prior_year, current_year])]
+    # Create overlay date (same year for both lines)
+    df_overlay["overlay_date"] = df_overlay["start_dt"].apply(
+        lambda d: pd.Timestamp(2000, d.month, d.day))
+    # Sort for cumulative calculations
+    df_overlay = df_overlay.sort_values("start_dt")
+    # Cumulative growth by year
+    df_overlay["year"] = df_overlay["start_dt"].dt.year.astype(str)
+    df_overlay["cumulative"] = df_overlay.groupby("year").cumcount() + 1
 
-# ------------------------------
-# CLUSTERED BAR PLOTS
-# ------------------------------
-def clustered_bar_plot(summary_df, group_field, title):
+    fig_cum = px.line(
+        df_overlay,
+        x="overlay_date",
+        y="cumulative",
+        color="year",
+        markers=True,
+        title="Cumulative New Members YoY (Season Comparison)")
 
-    # Force categorical axis
-    summary_df[group_field] = summary_df[group_field].astype(str)
+    fig_cum.update_layout(
+        xaxis_title="Month / Day",
+        yaxis_title="Cumulative Members",
+        legend_title="Year")
 
-    fig = go.Figure()
+    fig_cum.update_xaxes(tickformat="%b %d")
 
-    # Prior Year
-    fig.add_trace(go.Bar(
-        x=summary_df[group_field],
-        y=summary_df["prior"],
-        name="Prior Year",
-        marker_color="grey"
-    ))
+    st.plotly_chart(fig_cum, width='stretch')
 
-    # Current Year (colored by performance)
-    fig.add_trace(go.Bar(
-        x=summary_df[group_field],
-        y=summary_df["current"],
-        name="Current Year",
-        marker_color=summary_df["color"]
-    ))
+# --------------------------------------------------
+# ROW 3: Region / District Performance
+# --------------------------------------------------
+st.subheader("Performance by Region / District")
 
-    fig.update_layout(
-        title=title,
-        barmode="group",
-        plot_bgcolor="#1e1e1e",
-        paper_bgcolor="#1e1e1e",
-        font_color="white",
-        xaxis_title=group_field,
-        yaxis_title="New Members"
+col1, col2 = st.columns(2)
+
+# -------------------------
+# REGION CHART
+# -------------------------
+with col1:
+    region_fig = go.Figure()
+    region_summary_sorted = region_summary.sort_values("performance_pct")
+    # Current performance bars
+    region_fig.add_trace(go.Bar(
+        y=region_summary_sorted["region"].astype(str),
+        x=region_summary_sorted["current"],
+        orientation="h",
+        marker_color="#3B82F6",
+        name="Current Members",
+        text=region_summary_sorted["current"],
+        textposition="inside"))
+    # Target markers
+    region_fig.add_trace(go.Scatter(
+        y=region_summary_sorted["region"].astype(str),
+        x=region_summary_sorted["target"],
+        mode="markers",
+        marker=dict(
+            symbol="line-ns",
+            size=28,
+            color="#009113",
+            line=dict(width=4)),
+        name="Target"))
+    # Add target labels
+    for _, row in region_summary_sorted.iterrows():
+        region_fig.add_annotation(
+            x=row["target"],
+            y=str(row["region"]),
+            text=f"{row['target']:,}",
+            showarrow=False,
+            xanchor="left",
+            xshift=8,
+            font=dict(color="#009113", size=12))
+    region_fig.update_layout(
+        title="Region Progress vs Target",
+        xaxis_title="New Members",
+        yaxis_title="Region",
+        height=400,
+        showlegend=False)
+
+    st.plotly_chart(region_fig, width='stretch')
+
+# -------------------------
+# DISTRICT BULLET CHART
+# -------------------------
+with col2:
+    district_fig = go.Figure()
+    district_summary_sorted = district_summary.sort_values("performance_pct")
+    district_fig.add_trace(go.Bar(
+        y=district_summary_sorted["district"].astype(str),
+        x=district_summary_sorted["current"],
+        orientation="h",
+        marker_color="#3B82F6",
+        name="Current Members",
+        text=district_summary_sorted["current"],
+        textposition="inside"))
+    district_fig.add_trace(go.Scatter(
+        y=district_summary_sorted["district"].astype(str),
+        x=district_summary_sorted["target"],
+        mode="markers",
+        marker=dict(
+            symbol="line-ns",
+            size=28,
+            color="#009113",
+            line=dict(width=4)),
+        name="Target"))
+    for _, row in district_summary_sorted.iterrows():
+        district_fig.add_annotation(
+            x=row["target"],
+            y=str(row["district"]),
+            text=f"{row['target']:,}",
+            showarrow=False,
+            xanchor="left",
+            xshift=8,
+            font=dict(color="#009113", size=12))
+    district_fig.update_layout(
+        title="District Progress vs Target",
+        xaxis_title="New Members",
+        yaxis_title="District",
+        height=400,
+        showlegend=False)
+    st.plotly_chart(district_fig, width='stretch')
+
+region_summary = region_summary.sort_values("performance_pct", ascending=False)
+district_summary = district_summary.sort_values("performance_pct", ascending=False)
+
+# -------------------------
+# GYM BULLET CHART
+# -------------------------
+
+st.subheader("Gym Progress vs Target")
+
+gym_summary_sorted = gym_summary.sort_values("performance_pct").reset_index(drop=True)
+# Create a numeric coordinate for each gym (0, 1, 2...)
+gym_summary_sorted["y_coord"] = gym_summary_sorted.index 
+# Create the label strings
+gym_summary_sorted["gym_label"] = gym_summary_sorted["store_nbr"].astype(str)
+
+gym_fig = go.Figure()
+
+# Horizontal bars using coordinates for Y
+gym_fig.add_trace(go.Bar(
+    y=gym_summary_sorted["y_coord"],
+    x=gym_summary_sorted["current"],
+    orientation="h",
+    marker_color="#3B82F6",
+    name="Current Members",
+    text=gym_summary_sorted["current"],
+    textposition="inside",
+    width=0.7 # Adjust bar thickness
+))
+
+# Target markers (vertical lines)
+gym_fig.add_trace(go.Scatter(
+    y=gym_summary_sorted["y_coord"],
+    x=gym_summary_sorted["target"],
+    mode="markers",
+    marker=dict(
+        symbol="line-ns",
+        size=24,
+        color="#009113",
+        line=dict(width=4)
+    ),
+    name="Target"
+))
+
+# Target labels
+for _, row in gym_summary_sorted.iterrows():
+    gym_fig.add_annotation(
+        x=row["target"],
+        y=row["y_coord"],
+        text=f"{row['target']:,}",
+        showarrow=False,
+        xanchor="left",
+        xshift=10,
+        font=dict(color="#009113", size=11)
     )
 
-    # Critical fix: treat axis as categorical
-    fig.update_xaxes(type="category")
+# 2. Map coordinates to labels and fix layout
+gym_fig.update_layout(
+    title="Gym Progress vs Target",
+    xaxis_title="New Members",
+    yaxis=dict(
+        title="Store Number",
+        tickmode="array",
+        tickvals=gym_summary_sorted["y_coord"],
+        ticktext=gym_summary_sorted["gym_label"],
+        # Ensures no extra space at the top/bottom
+        range=[-0.5, len(gym_summary_sorted) - 0.5] 
+    ),
+    height=max(500, len(gym_summary_sorted) * 45),
+    showlegend=False,
+    margin=dict(l=120, r=50) # Left margin for store labels
+)
 
-    return fig
-st.subheader("YoY New Members vs Target")
+st.plotly_chart(gym_fig, width='stretch')
 
-st.markdown("""
-<div style="display: flex; gap: 20px; margin-bottom: 10px;">
-    <div style="display: flex; align-items: center; gap: 5px;">
-        <div style="width: 20px; height: 20px; background-color: green;"></div>
-        <span>Exceeding Target</span>
-    </div>
-    <div style="display: flex; align-items: center; gap: 5px;">
-        <div style="width: 20px; height: 20px; background-color: yellow; border: 1px solid #ccc;"></div>
-        <span>Within 10% of Target</span>
-    </div>
-    <div style="display: flex; align-items: center; gap: 5px;">
-        <div style="width: 20px; height: 20px; background-color: red;"></div>
-        <span>More than 10% Below Target</span>
-    </div>
-</div>
-""", unsafe_allow_html=True)
-# Create two columns for Region and District
+# --------------------------------------------------
+# Leaderboards (Top / Bottom Gyms)
+# --------------------------------------------------
+st.subheader("Top / Bottom Gyms")
 col1, col2 = st.columns(2)
 
 with col1:
-    st.plotly_chart(
-        clustered_bar_plot(region_summary, "region", "Region YoY New Members vs Target"),
-        width='stretch'
+    top_gyms = build_leaderboard(gym_summary, "store_nbr", "Gym", top_n=5)
+    st.write("Top 5 Gyms")
+    st.dataframe(
+        top_gyms[["Gym", "Prior Year", "Current Year", "Target", "Performance %"]],
+        width='stretch',
+        hide_index=True
     )
 
 with col2:
-    st.plotly_chart(
-        clustered_bar_plot(district_summary, "district", "District YoY New Members vs Target"),
-        width='stretch'
+    # Bottom performers based on performance %
+    bottom_gyms = gym_summary.copy()
+    bottom_gyms["performance_pct"] = bottom_gyms["current"] / bottom_gyms["target"]
+    bottom_gyms = bottom_gyms.sort_values("performance_pct").head(5)
+
+    # Rename and format columns to match top leaderboard
+    bottom_gyms_display = bottom_gyms.rename(columns={
+        "store_nbr": "Gym",
+        "prior": "Prior Year",
+        "current": "Current Year",
+        "target": "Target"
+    })
+    bottom_gyms_display["Performance %"] = (bottom_gyms["performance_pct"]*100).round(1).astype(str) + "%"
+
+    st.write("Bottom 5 Gyms")
+    st.dataframe(
+        bottom_gyms_display[["Gym", "Prior Year", "Current Year", "Target", "Performance %"]],
+        width='stretch',
+        hide_index=True
     )
-
-# Full-width Gym plot below
-st.plotly_chart(
-    clustered_bar_plot(gym_summary, "store_nbr", "Gym YoY New Members vs Target"),
-    width='stretch'
-)
 # ------------------------------
-# TREND OF NEW MEMBERS OVER TIME
+# PERSONAL TRAINING KPI TILES
 # ------------------------------
-st.header("New Members YoY")
+st.subheader("Personal Training Summary (June–August)")
 
-def new_members_yoy(df):
+current_year = df["start_dt"].dt.year.max()
+prior_year = current_year - 1
 
+latest_current_date = df[df["start_dt"].dt.year == current_year]["start_dt"].max()
+
+# Current year total through latest date
+current_total = df[
+    (df["start_dt"].dt.year == current_year) &
+    (df["start_dt"] <= latest_current_date)
+]["prod_cnt"].sum()
+
+# Correct prior year total: from 6/1 up to same MM/DD as current year's latest date
+summer_start_prior = pd.Timestamp(f"{prior_year}-06-01")
+prior_same_day = pd.Timestamp(f"{prior_year}-{latest_current_date.month:02d}-{latest_current_date.day:02d}")
+
+prior_same_day_total = df[
+    (df["start_dt"].dt.year == prior_year) &
+    (df["start_dt"] >= summer_start_prior) &
+    (df["start_dt"] <= prior_same_day)
+]["prod_cnt"].sum()
+
+# Prior year full summer total (6/1–8/31)
+summer_end_prior = pd.Timestamp(f"{prior_year}-08-31")
+prior_full_summer_total = df[
+    (df["start_dt"].dt.year == prior_year) &
+    (df["start_dt"] >= summer_start_prior) &
+    (df["start_dt"] <= summer_end_prior)
+]["prod_cnt"].sum()
+
+# Display KPIs
+col1, col2, col3 = st.columns(3)
+col1.metric("Current Year Total PT Sessions", f"{current_total:,}")
+col2.metric(f"Prior Year Total PT Sessions (through {latest_current_date.strftime('%m/%d')})", f"{prior_same_day_total:,}")
+col3.metric("Prior Year Full Summer Total PT Sessions", f"{prior_full_summer_total:,}")
+
+# ------------------------------
+# PROD_CNT YOY LINE CHART
+# ------------------------------
+st.header("Total Personal Training Sessions YoY (June–August)")
+
+def prod_cnt_yoy_overlay(df):
+    df = df.copy()
     df["start_dt"] = pd.to_datetime(df["start_dt"])
-
+    
+    # Current and prior year
     current_year = df["start_dt"].dt.year.max()
     prior_year = current_year - 1
-
-    # Filter to NEW members and summer months
-    df_summer = df[
-        (df["cust_type"] == "NEW") &
-        (df["start_dt"].dt.month >= 6) &
-        (df["start_dt"].dt.month <= 8) &
-        (df["start_dt"].dt.year.isin([current_year, prior_year]))
-    ].copy()
-
-    # Normalize both years onto same seasonal axis
-    df_summer["season_date"] = df_summer["start_dt"].apply(
-        lambda d: pd.Timestamp(year=2000, month=d.month, day=d.day)
-    )
-
-    df_summer["year"] = df_summer["start_dt"].dt.year.astype(str)
-
-    # Weekly aggregation
-    df_trend = (
-        df_summer
-        .groupby(["year", pd.Grouper(key="season_date", freq="W")])
-        .size()
-        .reset_index(name="new_members")
-    )
-
-    fig = px.line(
-        df_trend,
-        x="season_date",
-        y="new_members",
-        color="year",
-        title="New Members YoY (June–August)",
-        markers=True
-    )
-
-    fig.update_layout(
-        plot_bgcolor="#1e1e1e",
-        paper_bgcolor="#1e1e1e",
-        font_color="white",
-        xaxis_title="Summer Week",
-        yaxis_title="New Members",
-        legend_title="Year"
-    )
-
-    fig.update_xaxes(
-        tickformat="%b %d"
-    )
-
-    return fig
-
-
-st.plotly_chart(new_members_yoy(df),  width='stretch')
-
-# ------------------------------
-# PROD_CNT VISUALIZATION
-# ------------------------------
-st.header("Personal Training Sessions YoY")
-
-def pt_sessions_yoy(df):
-
-    df["start_dt"] = pd.to_datetime(df["start_dt"])
-
-    current_year = df["start_dt"].dt.year.max()
-    prior_year = current_year - 1
-
-    # Filter to summer window
+    
+    # Filter to summer months (June–August) and these two years
     df_summer = df[
         (df["start_dt"].dt.month >= 6) &
         (df["start_dt"].dt.month <= 8) &
         (df["start_dt"].dt.year.isin([current_year, prior_year]))
     ].copy()
-
-    # Normalize both years onto the same reference year (2000)
+    
+    # Normalize both years onto same reference year (2000) for overlay
     df_summer["season_date"] = df_summer["start_dt"].apply(
         lambda d: pd.Timestamp(year=2000, month=d.month, day=d.day)
     )
-
+    
     df_summer["year"] = df_summer["start_dt"].dt.year.astype(str)
-
-    # Aggregate weekly PT sessions
-    df_trend = (
-        df_summer
-        .groupby(["year", pd.Grouper(key="season_date", freq="W")])["prod_cnt"]
-        .sum()
-        .reset_index()
-    )
-
-    # Plot YoY lines
+    
+    # Aggregate total prod_cnt per day
+    df_trend = df_summer.groupby(["season_date", "year"])["prod_cnt"].sum().reset_index()
+    
+    # Plot line chart
     fig = px.line(
         df_trend,
         x="season_date",
         y="prod_cnt",
         color="year",
-        title="Personal Training Sessions YoY (June–August)",
+        title="Total Personal Training Sessions YoY (June–August)",
         markers=True
     )
-
+    
     fig.update_layout(
         plot_bgcolor="#1e1e1e",
         paper_bgcolor="#1e1e1e",
         font_color="white",
-        xaxis_title="Summer Week",
+        xaxis_title="Summer Date",
         yaxis_title="PT Sessions",
         legend_title="Year"
     )
-
-    # Weekly ticks formatted as Month-Day
-    fig.update_xaxes(
-        tickformat="%b %d",
-        dtick="M1"
-    )
-
+    
+    # Format X-axis as Month-Day
+    fig.update_xaxes(tickformat="%b %d")
+    
     return fig
 
+st.plotly_chart(prod_cnt_yoy_overlay(df), width='stretch')
 
-st.plotly_chart(pt_sessions_yoy(df), width='stretch')
+# ------------------------------
+# PERSONAL TRAINING PERFORMANCE LEADERBOARDS (FIXED)
+# ------------------------------
 
+st.subheader("Top Performing Units — Personal Training Sessions")
 
+def calc_pt_summary_correct(df, group_field):
+    """
+    Returns a summary table with prior year (through same day as current year),
+    current year, improvement %, and performance flag.
+    """
+    df = df.copy()
+    current_year = df["start_dt"].dt.year.max()
+    prior_year = current_year - 1
 
-st.plotly_chart(pt_sessions_yoy(df), width='stretch')
+    # Determine cutoff date for current year
+    latest_current_date = df[df["start_dt"].dt.year == current_year]["start_dt"].max()
+    cutoff_month = latest_current_date.month
+    cutoff_day = latest_current_date.day
+
+    # Current year PT sessions (6/1 → latest_current_date)
+    summer_current = df[
+        (df["start_dt"].dt.year == current_year) &
+        (df["start_dt"] >= pd.Timestamp(f"{current_year}-06-01")) &
+        (df["start_dt"] <= latest_current_date)
+    ]
+    curr = summer_current.groupby(group_field)["prod_cnt"].sum().reset_index(name="current")
+
+    # Prior year PT sessions for same period (6/1 → same month/day as current year)
+    summer_prior = df[
+        (df["start_dt"].dt.year == prior_year) &
+        (
+            (df["start_dt"].dt.month < cutoff_month) |
+            ((df["start_dt"].dt.month == cutoff_month) & (df["start_dt"].dt.day <= cutoff_day))
+        ) &
+        (df["start_dt"] >= pd.Timestamp(f"{prior_year}-06-01"))
+    ]
+    prior = summer_prior.groupby(group_field)["prod_cnt"].sum().reset_index(name="prior")
+
+    # Merge
+    merged = pd.merge(prior, curr, on=group_field, how="outer").fillna(0)
+    merged["current"] = merged["current"].astype(int)
+    merged["prior"] = merged["prior"].astype(int)
+
+    # Improvement %
+    merged["Improvement %"] = ((merged["current"] - merged["prior"]) / merged["prior"].replace(0, 1) * 100).round(1)
+
+    # Flag top performers
+    merged["Performance"] = merged["current"] >= merged["prior"]
+
+    return merged.sort_values("Improvement %", ascending=False)
+
+# ------------------------------
+# Generate PT leaderboards
+# ------------------------------
+gym_pt_summary = calc_pt_summary_correct(df, "store_nbr")
+district_pt_summary = calc_pt_summary_correct(df, "district")
+region_pt_summary = calc_pt_summary_correct(df, "region")
+
+# ------------------------------
+# Display as Streamlit leaderboards
+# ------------------------------
+col1, col2, col3 = st.columns(3)
+
+def display_pt_leaderboard(col, df, group_field, title):
+    top_count = df[df["Performance"]].shape[0]
+    col.metric(f"{title} Exceeding Last Year", top_count)
+    display_df = df.rename(columns={group_field: title})
+    col.dataframe(display_df[[title, "prior", "current", "Improvement %", "Performance"]], width='stretch', hide_index=True)
+
+display_pt_leaderboard(col1, gym_pt_summary, "store_nbr", "Gym")
+display_pt_leaderboard(col2, district_pt_summary, "district", "District")
+display_pt_leaderboard(col3, region_pt_summary, "region", "Region")
