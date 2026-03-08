@@ -148,11 +148,12 @@ projected_total, variance, target_total = summer_projection(df_current_summer, d
 # ------------------------------
 st.header("Key Metrics (June–August)")
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Current Members", f"{df_current_summer.shape[0]:,}")
-col2.metric("Summer Target", f"{target_total:,}")
+col1.metric("Current Year New Members", f"{df_current_summer.shape[0]:,}")
+col2.metric("New Member Target", f"{target_total:,}")
 col3.metric("Projected Total", f"{projected_total:,}")
 col4.metric("Projected Variance", f"{variance:,}", delta=f"{variance:,}", delta_color="inverse" if variance>=0 else "normal")
 
+st.write("Projections estimated using a seasonal pace projection based on prior year new members.")
 # ------------------------------
 # ROW 2: Goal Gauge + Cumulative Growth
 # ------------------------------
@@ -162,10 +163,10 @@ col1, col2 = st.columns(2)
 with col1:
     current_value = df_current_summer.shape[0]
     fig_gauge = go.Figure(go.Indicator(
-        mode="gauge+number+delta",
+        mode="gauge+number",
         value=current_value,
         number={'valueformat': ',', 'font': {'size': 32}},
-        title={'text': "Summer Goal Progress", 'font': {'size': 20}},
+        title={'text': "New Member Goal Progress", 'font': {'size': 20}},
         gauge={
             'axis': {'range': [0, max(target_total*1.2, current_value)], 'tickformat': ","},
             'bar': {'color': "#3B82F6", 'thickness': 0.5},
@@ -176,7 +177,7 @@ with col1:
         }
     ))
     # Position target annotation below the current number
-    fig_gauge.add_annotation(x=0.5, y=0.0, text=f"Summer Target: {target_total:,}", showarrow=False, font=dict(size=14))
+    fig_gauge.add_annotation(x=0.5, y=0.0, text=f"Summer Target: {target_total:,}", showarrow=False, font=dict(size=15))
     st.plotly_chart(fig_gauge, width='stretch')
 
 # Cumulative Growth
@@ -189,7 +190,7 @@ with col2:
     df_overlay["cumulative"] = df_overlay.groupby("year").cumcount() + 1
 
     fig_cum = px.line(df_overlay, x="overlay_date", y="cumulative", color="year", markers=True,
-                      title="Cumulative New Members YoY (Season Comparison)")
+                      title="Cumulative New Members YoY")
     fig_cum.update_layout(xaxis_title="Month / Day", yaxis_title="Cumulative Members", legend_title="Year")
     fig_cum.update_xaxes(tickformat="%b %d")
     st.plotly_chart(fig_cum, width='stretch')
@@ -257,7 +258,7 @@ with col2:
 # ------------------------------
 # PERSONAL TRAINING KPI TILES
 # ------------------------------
-st.subheader("Personal Training Summary (June–August)")
+st.subheader("Personal Training Sessions (June–August)")
 
 current_year = df["start_dt"].dt.year.max()
 prior_year = current_year - 1
@@ -451,6 +452,6 @@ def display_pt_leaderboard(col, df, group_field, title):
     display_df = df.rename(columns={group_field: title})
     col.dataframe(display_df[[title, "prior", "current", "Improvement %", "Performance"]], width='stretch', hide_index=True)
 
-display_pt_leaderboard(col1, gym_pt_summary, "store_nbr", "Gym")
-display_pt_leaderboard(col2, district_pt_summary, "district", "District")
-display_pt_leaderboard(col3, region_pt_summary, "region", "Region")
+display_pt_leaderboard(col1, gym_pt_summary, "store_nbr", "Gyms")
+display_pt_leaderboard(col2, district_pt_summary, "district", "Districts")
+display_pt_leaderboard(col3, region_pt_summary, "region", "Regions")
