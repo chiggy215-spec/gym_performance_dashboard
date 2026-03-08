@@ -295,6 +295,38 @@ col2.metric(f"Prior Year Total PT Sessions (through {latest_current_date.strftim
 col3.metric("Prior Year Full Summer Total PT Sessions", f"{prior_full_summer_total:,}")
 
 # ------------------------------
+# PT SESSIONS PER MEMBER KPI
+# ------------------------------
+st.subheader("Personal Training Sessions per Member (June–August)")
+
+# Current year details
+current_year = df["start_dt"].dt.year.max()
+prior_year = current_year - 1
+latest_current_date = df[df["start_dt"].dt.year == current_year]["start_dt"].max()
+
+# Current year PT sessions & member count
+df_current = df[(df["start_dt"].dt.year == current_year) & (df["start_dt"] <= latest_current_date)]
+current_pt_total = df_current["prod_cnt"].sum()
+current_member_count = df_current["cust_type"].count()  # count all members in period
+current_pt_per_member = current_pt_total / current_member_count if current_member_count else 0
+
+# Prior year PT sessions & member count (same MM/DD as current year)
+prior_cutoff_date = pd.Timestamp(f"{prior_year}-{latest_current_date.month:02d}-{latest_current_date.day:02d}")
+df_prior = df[(df["start_dt"].dt.year == prior_year) &
+              (df["start_dt"] >= pd.Timestamp(f"{prior_year}-06-01")) &
+              (df["start_dt"] <= prior_cutoff_date)]
+prior_pt_total = df_prior["prod_cnt"].sum()
+prior_member_count = df_prior["cust_type"].count()
+prior_pt_per_member = prior_pt_total / prior_member_count if prior_member_count else 0
+
+# Display as KPI tile
+col1, col2 = st.columns(2)
+col1.metric(f"Current Year PT Sessions / Member", f"{current_pt_per_member:.2f}")
+col2.metric(f"Prior Year PT Sessions / Member (through {latest_current_date.strftime('%m/%d')})",
+            f"{prior_pt_per_member:.2f}")
+
+
+# ------------------------------
 # PROD_CNT YOY LINE CHART
 # ------------------------------
 st.header("Total Personal Training Sessions YoY (June–August)")
@@ -351,38 +383,7 @@ def prod_cnt_yoy_overlay(df):
 st.plotly_chart(prod_cnt_yoy_overlay(df), width='stretch')
 
 # ------------------------------
-# PT SESSIONS PER MEMBER KPI
-# ------------------------------
-st.subheader("Personal Training Sessions per Member (June–August)")
-
-# Current year details
-current_year = df["start_dt"].dt.year.max()
-prior_year = current_year - 1
-latest_current_date = df[df["start_dt"].dt.year == current_year]["start_dt"].max()
-
-# Current year PT sessions & member count
-df_current = df[(df["start_dt"].dt.year == current_year) & (df["start_dt"] <= latest_current_date)]
-current_pt_total = df_current["prod_cnt"].sum()
-current_member_count = df_current["cust_type"].count()  # count all members in period
-current_pt_per_member = current_pt_total / current_member_count if current_member_count else 0
-
-# Prior year PT sessions & member count (same MM/DD as current year)
-prior_cutoff_date = pd.Timestamp(f"{prior_year}-{latest_current_date.month:02d}-{latest_current_date.day:02d}")
-df_prior = df[(df["start_dt"].dt.year == prior_year) &
-              (df["start_dt"] >= pd.Timestamp(f"{prior_year}-06-01")) &
-              (df["start_dt"] <= prior_cutoff_date)]
-prior_pt_total = df_prior["prod_cnt"].sum()
-prior_member_count = df_prior["cust_type"].count()
-prior_pt_per_member = prior_pt_total / prior_member_count if prior_member_count else 0
-
-# Display as KPI tile
-col1, col2 = st.columns(2)
-col1.metric(f"Current Year PT Sessions / Member", f"{current_pt_per_member:.2f}")
-col2.metric(f"Prior Year PT Sessions / Member (through {latest_current_date.strftime('%m/%d')})",
-            f"{prior_pt_per_member:.2f}")
-
-# ------------------------------
-# PERSONAL TRAINING PERFORMANCE LEADERBOARDS (FIXED)
+# PERSONAL TRAINING PERFORMANCE LEADERBOARDS
 # ------------------------------
 
 st.subheader("Top Performing Units — Personal Training Sessions")
