@@ -2,9 +2,8 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from streamlit_autorefresh import st_autorefresh
 from datetime import datetime
-from sklearn.linear_model import LinearRegression
-import numpy as np
 
 # ------------------------------
 # PAGE CONFIG
@@ -12,6 +11,11 @@ import numpy as np
 st.set_page_config(page_title="Gym Performance Dashboard", layout="wide")
 st.title("Gym Performance Dashboard")
 st.write("Tracking New Gym Memberships and PT Sales Summer Goals")
+# ------------------------------
+# AUTO REFRESH
+# ------------------------------
+# Refresh once every 24 hours (in milliseconds)
+count = st_autorefresh(interval=24*60*60*1000, key="dailyrefresh")
 
 # ------------------------------
 # LOAD DATA
@@ -122,96 +126,6 @@ col1, col2, col3 = st.columns(3)
 col1.metric("Current Year New Members", int(df_new_summer_current.shape[0]))
 col2.metric("Target New Members Through Date", int(df_new_summer_prior.shape[0]*1.10))
 col3.metric("Prior Year New Members Through Date", int(df_new_summer_prior.shape[0]))
-
-# ------------------------------
-# Projections
-# ------------------------------
-def overall_summer_projection(df_current, df_prior):
-    """
-    Projects total summer new members using a simple linear model
-    and compares to prior year target.
-    """
-    df_current = df_current.copy()
-    df_current['start_dt'] = pd.to_datetime(df_current['start_dt'])
-    
-    current_year = df_current['start_dt'].dt.year.max()
-    prior_year = current_year - 1
-    
-    # Summer period
-    summer_start = pd.to_datetime(f"{current_year}-06-01")
-    summer_end = pd.to_datetime(f"{current_year}-08-31")
-    
-    # Filter current year summer data (6/1 -> most recent date)
-    df_summer_current = df_current[
-        (df_current['start_dt'] >= summer_start) &
-        (df_current['start_dt'] <= summer_end)
-    ]
-    
-    # Aggregate daily counts
-    df_daily = df_summer_current.groupby('start_dt').size().reset_index(name='count')
-    df_daily = df_daily.sort_values('start_dt')
-    
-    if len(df_daily) < 2:
-        projected_total = df_daily['count'].sum()
-    else:
-        # Linear regression over ordinal dates
-        X = df_daily['start_dt'].map(pd.Timestamp.toordinal).values.reshape(-1,1)
-        y = df_daily['count'].values
-        model = LinearRegression()
-        model.fit(X, y)
-        
-        # Project total for 8/31
-        projected_total = model.predict(np.array([[summer_end.toordinal()]]))[0]
-        projected_total = max(projected_total, df_daily['count'].sum())  # don't go below cumulative
-    
-    # Prior year summer total
-    df_prior_summer = df_prior[
-        (df_prior['start_dt'].dt.month >= 6) &
-        (df_prior['start_dt'].dt.month <= 8)
-    ]
-    prior_total = df_prior_summer.shape[0]
-    target = prior_total * 1.10
-    
-    # Determine color
-    if projected_total >= target:
-        color = 'green'
-    elif projected_total >= 0.9 * target:
-        color = 'yellow'
-    else:
-        color = 'red'
-    
-    return {
-        'current_total': df_daily['count'].sum(),
-        'projected_total': int(projected_total),
-        'prior_total': prior_total,
-        'target': int(target),
-        'color': color
-    }
-
-# ------------------------------
-# Apply projection
-# ------------------------------
-summer_projection = overall_summer_projection(df_new_summer_current, df_new_summer_prior)
-
-# ------------------------------
-# Display in Streamlit
-# ------------------------------
-st.subheader("Projected Summer New Members (Overall)")
-
-st.metric(
-    label="Current New Members (6/1 → Today)",
-    value=summer_projection['current_total']
-)
-
-st.metric(
-    label="Projected New Members by 8/31",
-    value=summer_projection['projected_total'],
-    delta=summer_projection['projected_total'] - summer_projection['target'],
-    delta_color="inverse"  # green if positive, red if negative
-)
-
-st.write(f"Target New Members (10% above prior year): {summer_projection['target']}")
-st.write(f"Status: ", summer_projection['color'].capitalize())
 
 # ------------------------------
 # TOP PERFORMERS LEADERBOARDS
@@ -463,6 +377,10 @@ def pt_sessions_yoy(df):
     )
 
     return fig
+
+
+st.plotly_chart(pt_sessions_yoy(df), width='stretch')
+
 
 
 st.plotly_chart(pt_sessions_yoy(df), width='stretch')
