@@ -197,7 +197,7 @@ with col2:
 # ------------------------------
 # ROW 3: Region / District Bullet Charts
 # ------------------------------
-st.subheader("Performance by Region / District")
+st.subheader("Performance by Region / District / Gym")
 col1, col2 = st.columns(2)
 
 def plot_bullet_chart(summary_df, y_field, title):
@@ -221,7 +221,7 @@ with col2:
 # ------------------------------
 # GYM BULLET CHART
 # ------------------------------
-st.subheader("Gym Progress vs Target")
+
 gym_summary_sorted = gym_summary.sort_values("performance_pct").reset_index(drop=True)
 gym_summary_sorted["y_coord"] = gym_summary_sorted.index
 gym_summary_sorted["gym_label"] = gym_summary_sorted["store_nbr"].astype(str)
@@ -241,7 +241,7 @@ gym_fig.update_layout(title="Gym Progress vs Target", xaxis_title="New Members",
 st.plotly_chart(gym_fig, width='stretch')
 
 # ------------------------------
-# TOP / BOTTOM GYM LEADERBOARDS (SIMPLIFIED)
+# TOP / BOTTOM GYM LEADERBOARDS 
 # ------------------------------
 st.subheader("Top / Bottom Gyms")
 col1, col2 = st.columns(2)
@@ -297,7 +297,6 @@ col3.metric("Prior Year Full Summer Total PT Sessions", f"{prior_full_summer_tot
 # ------------------------------
 # PT SESSIONS PER MEMBER KPI
 # ------------------------------
-st.subheader("Personal Training Sessions per Member (June–August)")
 
 # Current year details
 current_year = df["start_dt"].dt.year.max()
