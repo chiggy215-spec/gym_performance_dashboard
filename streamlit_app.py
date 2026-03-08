@@ -9,12 +9,11 @@ from streamlit_autorefresh import st_autorefresh
 # ------------------------------
 # AUTO REFRESH (Daily)
 # ------------------------------
-
 st_autorefresh(interval=24*60*60*1000, key="daily_refresh")
 
-# --------------------------------------------------
+# ------------------------------
 # PAGE CONFIG
-# --------------------------------------------------
+# ------------------------------
 st.set_page_config(
     page_title="Gym Performance Dashboard",
     layout="wide"
@@ -23,9 +22,9 @@ st.set_page_config(
 st.title("Gym Performance Dashboard")
 st.write("Tracking New Gym Memberships and PT Sales Summer Goals (June–August)")
 
-# --------------------------------------------------
+# ------------------------------
 # LOAD DATA
-# --------------------------------------------------
+# ------------------------------
 @st.cache_data
 def load_data():
     url = "https://raw.githubusercontent.com/chiggy215-spec/gym_performance_dashboard/main/data/Dashboard%20Exercise%20Data.xlsx"
@@ -35,22 +34,20 @@ def load_data():
     return df
 
 df = load_data()
-
 df_new = df[df["cust_type"] == "NEW"].copy()
 
-# --------------------------------------------------
+# ------------------------------
 # FILTERS
-# --------------------------------------------------
+# ------------------------------
 st.sidebar.header("Filters")
 
+# Region, district, gym filters
 regions = ["All"] + sorted(df_new["region"].dropna().unique().tolist())
 districts = ["All"] + sorted(df_new["district"].dropna().unique().tolist())
 gyms = ["All"] + sorted(df_new["store_nbr"].dropna().unique().tolist())
 
 selected_region = st.sidebar.selectbox("Region", regions)
-filtered_df = df_new.copy()
-if selected_region != "All":
-    filtered_df = filtered_df[filtered_df["region"] == selected_region]
+filtered_df = df_new if selected_region == "All" else df_new[df_new["region"] == selected_region]
 
 available_districts = ["All"] + sorted(filtered_df["district"].dropna().unique().tolist())
 selected_district = st.sidebar.selectbox("District", available_districts)
@@ -62,6 +59,7 @@ selected_gym = st.sidebar.selectbox("Gym", available_gyms)
 if selected_gym != "All":
     filtered_df = filtered_df[filtered_df["store_nbr"] == selected_gym]
 
+# Date range filter
 min_date = filtered_df["start_dt"].min()
 max_date = filtered_df["start_dt"].max()
 start_date, end_date = st.sidebar.date_input(
@@ -73,19 +71,15 @@ start_date, end_date = st.sidebar.date_input(
 filtered_df = filtered_df[(filtered_df["start_dt"] >= pd.Timestamp(start_date)) &
                           (filtered_df["start_dt"] <= pd.Timestamp(end_date))]
 
-# --------------------------------------------------
+# ------------------------------
 # HELPER FUNCTIONS
-# --------------------------------------------------
+# ------------------------------
 def calc_summary(df_current, df_prior, group_field):
-    # Current totals
-    curr = (df_current
-        .groupby(group_field)
-        .size()
-        .reset_index(name="current"))
-    prior = (df_prior
-        .groupby(group_field)
-        .size()
-        .reset_index(name="prior"))
+    """
+    Summarizes current and prior totals, target (prior*1.1), and performance %.
+    """
+    curr = df_current.groupby(group_field).size().reset_index(name="current")
+    prior = df_prior.groupby(group_field).size().reset_index(name="prior")
     merged = pd.merge(curr, prior, on=group_field, how="outer").fillna(0)
     merged["current"] = merged["current"].astype(int)
     merged["prior"] = merged["prior"].astype(int)
@@ -94,45 +88,45 @@ def calc_summary(df_current, df_prior, group_field):
     return merged
 
 def summer_projection(df_current, df_prior):
+    """
+    Calculates projected total, variance, and target for summer months.
+    """
     summer_start_current = pd.Timestamp(f"{df_current['start_dt'].dt.year.max()}-06-01")
     summer_end_current = pd.Timestamp(f"{df_current['start_dt'].dt.year.max()}-08-31")
     summer_start_prior = summer_start_current.replace(year=summer_start_current.year-1)
     summer_end_prior = summer_end_current.replace(year=summer_end_current.year-1)
-    
+
     df_current_summer = df_current[(df_current["start_dt"] >= summer_start_current) &
                                    (df_current["start_dt"] <= df_current["start_dt"].max())]
     df_prior_summer = df_prior[(df_prior["start_dt"] >= summer_start_prior) &
                                (df_prior["start_dt"] <= summer_end_prior)]
-    
-    # Projection based on days elapsed
+
     days_elapsed = (df_current_summer["start_dt"].max() - summer_start_current).days + 1
     prior_to_date = df_prior_summer[df_prior_summer["start_dt"] <= summer_start_prior + timedelta(days=days_elapsed)].shape[0]
     prior_full_total = df_prior_summer.shape[0]
     current_total = df_current_summer.shape[0]
-    
+
     percent_complete = prior_to_date / prior_full_total if prior_full_total > 0 else 1
     projected_total = int(current_total / percent_complete)
     target_total = int(prior_full_total * 1.10)
     variance = projected_total - target_total
-    
+
     return projected_total, variance, target_total
 
-def build_leaderboard(summary_df, group_field, display_name, top_n=10):
+def build_leaderboard(summary_df, group_field, display_name, top_n=10, ascending=False):
+    """
+    Builds a leaderboard for top or bottom performers.
+    Returns dataframe with columns: Display Name, Prior Year, Current Year, Target, Performance %
+    """
     df_lb = summary_df.copy()
-    df_lb = df_lb.sort_values("performance_pct", ascending=False).head(top_n)
-    df_lb["Performance %"] = (df_lb["performance_pct"]*100).round(1).astype(str) + "%"
-    return df_lb[[group_field, "prior", "current", "target", "Performance %"]].rename(columns={group_field: display_name, "prior":"Prior Year","current":"Current Year","target":"Target"})
+    df_lb = df_lb.sort_values("performance_pct", ascending=ascending).head(top_n)
+    df_lb = df_lb.rename(columns={group_field: display_name, "prior":"Prior Year","current":"Current Year","target":"Target"})
+    df_lb["Performance %"] = (df_lb["Current Year"] / df_lb["Target"] * 100).round(1).astype(str) + "%"
+    return df_lb[[display_name, "Prior Year","Current Year","Target","Performance %"]]
 
-def cumulative_growth(df, value_col="count"):
-    df_copy = df.copy()
-    df_copy["year"] = df_copy["start_dt"].dt.year
-    df_copy = df_copy.sort_values("start_dt")
-    df_copy["cumulative"] = df_copy.groupby("year").cumcount()+1 if value_col=="count" else df_copy.groupby("year")[value_col].cumsum()
-    return df_copy
-
-# --------------------------------------------------
-# CALCULATE SUMMER DATA
-# --------------------------------------------------
+# ------------------------------
+# SUMMER DATA CALCULATIONS
+# ------------------------------
 current_year = filtered_df["start_dt"].dt.year.max()
 prior_year = current_year - 1
 
@@ -149,299 +143,117 @@ region_summary = calc_summary(df_current_summer, df_prior_summer, "region")
 
 projected_total, variance, target_total = summer_projection(df_current_summer, df_prior_summer)
 
-# --------------------------------------------------
+# ------------------------------
 # ROW 1: KPIs
-# --------------------------------------------------
+# ------------------------------
 st.header("Key Metrics (June–August)")
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Current Members", f"{df_current_summer.shape[0]:,}")
 col2.metric("Summer Target", f"{target_total:,}")
 col3.metric("Projected Total", f"{projected_total:,}")
-col4.metric("Projected Variance", f"{variance:,}", delta=f"{variance:,}", delta_color="inverse" if variance >=0 else "normal")
+col4.metric("Projected Variance", f"{variance:,}", delta=f"{variance:,}", delta_color="inverse" if variance>=0 else "normal")
 
-# --------------------------------------------------
-# ROW 2: Primary Visuals (Goal Gauge + Cumulative Growth)
-# --------------------------------------------------
+# ------------------------------
+# ROW 2: Goal Gauge + Cumulative Growth
+# ------------------------------
 col1, col2 = st.columns(2)
 
 # Goal Gauge
 with col1:
-
     current_value = df_current_summer.shape[0]
-
     fig_gauge = go.Figure(go.Indicator(
         mode="gauge+number+delta",
         value=current_value,
-        number={
-            'valueformat': ',',
-            'font': {'size': 32}},
-        title={
-            'text': "Summer Goal Progress",
-            'font': {'size': 20}},
+        number={'valueformat': ',', 'font': {'size': 32}},
+        title={'text': "Summer Goal Progress", 'font': {'size': 20}},
         gauge={
-            'axis': {
-                'range': [0, max(target_total * 1.2, current_value)],
-                'tickformat': ","},
-            'bar': {
-                'color': "#3B82F6",   # clean dashboard blue
-                'thickness': 0.5},
+            'axis': {'range': [0, max(target_total*1.2, current_value)], 'tickformat': ","},
+            'bar': {'color': "#3B82F6", 'thickness': 0.5},
             'bgcolor': "white",
             'borderwidth': 2,
             'bordercolor': "#CBCCCE",
-            'threshold': {
-                'line': {
-                    'color': "#111827",
-                    'width': 4},
-                'thickness': 0.75,
-                'value': target_total}}))
-
-    # Label the target on the gauge
-    fig_gauge.add_annotation(
-        x=0.5,
-        y=0.15,
-        text=f"Summer Target: {target_total:,}",
-        showarrow=False,
-        font=dict(size=14))
-
+            'threshold': {'line': {'color': "#111827", 'width': 4}, 'thickness': 0.75, 'value': target_total}
+        }
+    ))
+    # Position target annotation below the current number
+    fig_gauge.add_annotation(x=0.5, y=0.0, text=f"Summer Target: {target_total:,}", showarrow=False, font=dict(size=14))
     st.plotly_chart(fig_gauge, width='stretch')
 
 # Cumulative Growth
 with col2:
-
     df_overlay = filtered_df.copy()
-    # Keep only current year and prior year
-    current_year = df_overlay["start_dt"].dt.year.max()
-    prior_year = current_year - 1
     df_overlay = df_overlay[df_overlay["start_dt"].dt.year.isin([prior_year, current_year])]
-    # Create overlay date (same year for both lines)
-    df_overlay["overlay_date"] = df_overlay["start_dt"].apply(
-        lambda d: pd.Timestamp(2000, d.month, d.day))
-    # Sort for cumulative calculations
-    df_overlay = df_overlay.sort_values("start_dt")
-    # Cumulative growth by year
+    df_overlay["overlay_date"] = df_overlay["start_dt"].apply(lambda d: pd.Timestamp(2000, d.month, d.day))
     df_overlay["year"] = df_overlay["start_dt"].dt.year.astype(str)
+    df_overlay = df_overlay.sort_values("start_dt")
     df_overlay["cumulative"] = df_overlay.groupby("year").cumcount() + 1
 
-    fig_cum = px.line(
-        df_overlay,
-        x="overlay_date",
-        y="cumulative",
-        color="year",
-        markers=True,
-        title="Cumulative New Members YoY (Season Comparison)")
-
-    fig_cum.update_layout(
-        xaxis_title="Month / Day",
-        yaxis_title="Cumulative Members",
-        legend_title="Year")
-
+    fig_cum = px.line(df_overlay, x="overlay_date", y="cumulative", color="year", markers=True,
+                      title="Cumulative New Members YoY (Season Comparison)")
+    fig_cum.update_layout(xaxis_title="Month / Day", yaxis_title="Cumulative Members", legend_title="Year")
     fig_cum.update_xaxes(tickformat="%b %d")
-
     st.plotly_chart(fig_cum, width='stretch')
 
-# --------------------------------------------------
-# ROW 3: Region / District Performance
-# --------------------------------------------------
+# ------------------------------
+# ROW 3: Region / District Bullet Charts
+# ------------------------------
 st.subheader("Performance by Region / District")
-
 col1, col2 = st.columns(2)
 
-# -------------------------
-# REGION CHART
-# -------------------------
+def plot_bullet_chart(summary_df, y_field, title):
+    df_sorted = summary_df.sort_values("performance_pct")
+    fig = go.Figure()
+    fig.add_trace(go.Bar(y=df_sorted[y_field].astype(str), x=df_sorted["current"], orientation="h",
+                         marker_color="#3B82F6", text=df_sorted["current"], textposition="inside"))
+    fig.add_trace(go.Scatter(y=df_sorted[y_field].astype(str), x=df_sorted["target"], mode="markers",
+                             marker=dict(symbol="line-ns", size=28, color="#009113", line=dict(width=4))))
+    for _, row in df_sorted.iterrows():
+        fig.add_annotation(x=row["target"], y=str(row[y_field]), text=f"{row['target']:,}",
+                           showarrow=False, xanchor="left", xshift=8, font=dict(color="#009113", size=12))
+    fig.update_layout(title=title, xaxis_title="New Members", yaxis_title=y_field, height=400, showlegend=False)
+    return fig
+
 with col1:
-    region_fig = go.Figure()
-    region_summary_sorted = region_summary.sort_values("performance_pct")
-    # Current performance bars
-    region_fig.add_trace(go.Bar(
-        y=region_summary_sorted["region"].astype(str),
-        x=region_summary_sorted["current"],
-        orientation="h",
-        marker_color="#3B82F6",
-        name="Current Members",
-        text=region_summary_sorted["current"],
-        textposition="inside"))
-    # Target markers
-    region_fig.add_trace(go.Scatter(
-        y=region_summary_sorted["region"].astype(str),
-        x=region_summary_sorted["target"],
-        mode="markers",
-        marker=dict(
-            symbol="line-ns",
-            size=28,
-            color="#009113",
-            line=dict(width=4)),
-        name="Target"))
-    # Add target labels
-    for _, row in region_summary_sorted.iterrows():
-        region_fig.add_annotation(
-            x=row["target"],
-            y=str(row["region"]),
-            text=f"{row['target']:,}",
-            showarrow=False,
-            xanchor="left",
-            xshift=8,
-            font=dict(color="#009113", size=12))
-    region_fig.update_layout(
-        title="Region Progress vs Target",
-        xaxis_title="New Members",
-        yaxis_title="Region",
-        height=400,
-        showlegend=False)
-
-    st.plotly_chart(region_fig, width='stretch')
-
-# -------------------------
-# DISTRICT BULLET CHART
-# -------------------------
+    st.plotly_chart(plot_bullet_chart(region_summary, "region", "Region Progress vs Target"), width='stretch')
 with col2:
-    district_fig = go.Figure()
-    district_summary_sorted = district_summary.sort_values("performance_pct")
-    district_fig.add_trace(go.Bar(
-        y=district_summary_sorted["district"].astype(str),
-        x=district_summary_sorted["current"],
-        orientation="h",
-        marker_color="#3B82F6",
-        name="Current Members",
-        text=district_summary_sorted["current"],
-        textposition="inside"))
-    district_fig.add_trace(go.Scatter(
-        y=district_summary_sorted["district"].astype(str),
-        x=district_summary_sorted["target"],
-        mode="markers",
-        marker=dict(
-            symbol="line-ns",
-            size=28,
-            color="#009113",
-            line=dict(width=4)),
-        name="Target"))
-    for _, row in district_summary_sorted.iterrows():
-        district_fig.add_annotation(
-            x=row["target"],
-            y=str(row["district"]),
-            text=f"{row['target']:,}",
-            showarrow=False,
-            xanchor="left",
-            xshift=8,
-            font=dict(color="#009113", size=12))
-    district_fig.update_layout(
-        title="District Progress vs Target",
-        xaxis_title="New Members",
-        yaxis_title="District",
-        height=400,
-        showlegend=False)
-    st.plotly_chart(district_fig, width='stretch')
+    st.plotly_chart(plot_bullet_chart(district_summary, "district", "District Progress vs Target"), width='stretch')
 
-region_summary = region_summary.sort_values("performance_pct", ascending=False)
-district_summary = district_summary.sort_values("performance_pct", ascending=False)
-
-# -------------------------
+# ------------------------------
 # GYM BULLET CHART
-# -------------------------
-
+# ------------------------------
 st.subheader("Gym Progress vs Target")
-
 gym_summary_sorted = gym_summary.sort_values("performance_pct").reset_index(drop=True)
-# Create a numeric coordinate for each gym (0, 1, 2...)
-gym_summary_sorted["y_coord"] = gym_summary_sorted.index 
-# Create the label strings
+gym_summary_sorted["y_coord"] = gym_summary_sorted.index
 gym_summary_sorted["gym_label"] = gym_summary_sorted["store_nbr"].astype(str)
 
 gym_fig = go.Figure()
-
-# Horizontal bars using coordinates for Y
-gym_fig.add_trace(go.Bar(
-    y=gym_summary_sorted["y_coord"],
-    x=gym_summary_sorted["current"],
-    orientation="h",
-    marker_color="#3B82F6",
-    name="Current Members",
-    text=gym_summary_sorted["current"],
-    textposition="inside",
-    width=0.7 # Adjust bar thickness
-))
-
-# Target markers (vertical lines)
-gym_fig.add_trace(go.Scatter(
-    y=gym_summary_sorted["y_coord"],
-    x=gym_summary_sorted["target"],
-    mode="markers",
-    marker=dict(
-        symbol="line-ns",
-        size=24,
-        color="#009113",
-        line=dict(width=4)
-    ),
-    name="Target"
-))
-
-# Target labels
+gym_fig.add_trace(go.Bar(y=gym_summary_sorted["y_coord"], x=gym_summary_sorted["current"], orientation="h",
+                         marker_color="#3B82F6", text=gym_summary_sorted["current"], textposition="inside", width=0.7))
+gym_fig.add_trace(go.Scatter(y=gym_summary_sorted["y_coord"], x=gym_summary_sorted["target"], mode="markers",
+                             marker=dict(symbol="line-ns", size=24, color="#009113", line=dict(width=4))))
 for _, row in gym_summary_sorted.iterrows():
-    gym_fig.add_annotation(
-        x=row["target"],
-        y=row["y_coord"],
-        text=f"{row['target']:,}",
-        showarrow=False,
-        xanchor="left",
-        xshift=10,
-        font=dict(color="#009113", size=11)
-    )
-
-# 2. Map coordinates to labels and fix layout
-gym_fig.update_layout(
-    title="Gym Progress vs Target",
-    xaxis_title="New Members",
-    yaxis=dict(
-        title="Store Number",
-        tickmode="array",
-        tickvals=gym_summary_sorted["y_coord"],
-        ticktext=gym_summary_sorted["gym_label"],
-        # Ensures no extra space at the top/bottom
-        range=[-0.5, len(gym_summary_sorted) - 0.5] 
-    ),
-    height=max(500, len(gym_summary_sorted) * 45),
-    showlegend=False,
-    margin=dict(l=120, r=50) # Left margin for store labels
-)
-
+    gym_fig.add_annotation(x=row["target"], y=row["y_coord"], text=f"{row['target']:,}", showarrow=False,
+                           xanchor="left", xshift=10, font=dict(color="#009113", size=11))
+gym_fig.update_layout(title="Gym Progress vs Target", xaxis_title="New Members",
+                      yaxis=dict(title="Store Number", tickmode="array", tickvals=gym_summary_sorted["y_coord"],
+                                 ticktext=gym_summary_sorted["gym_label"], range=[-0.5, len(gym_summary_sorted)-0.5]),
+                      height=max(500, len(gym_summary_sorted)*45), showlegend=False, margin=dict(l=120, r=50))
 st.plotly_chart(gym_fig, width='stretch')
 
-# --------------------------------------------------
-# Leaderboards (Top / Bottom Gyms)
-# --------------------------------------------------
+# ------------------------------
+# TOP / BOTTOM GYM LEADERBOARDS (SIMPLIFIED)
+# ------------------------------
 st.subheader("Top / Bottom Gyms")
 col1, col2 = st.columns(2)
 
 with col1:
-    top_gyms = build_leaderboard(gym_summary, "store_nbr", "Gym", top_n=5)
     st.write("Top 5 Gyms")
-    st.dataframe(
-        top_gyms[["Gym", "Prior Year", "Current Year", "Target", "Performance %"]],
-        width='stretch',
-        hide_index=True
-    )
+    st.dataframe(build_leaderboard(gym_summary, "store_nbr", "Gym", top_n=5), width='stretch', hide_index=True)
 
 with col2:
-    # Bottom performers based on performance %
-    bottom_gyms = gym_summary.copy()
-    bottom_gyms["performance_pct"] = bottom_gyms["current"] / bottom_gyms["target"]
-    bottom_gyms = bottom_gyms.sort_values("performance_pct").head(5)
-
-    # Rename and format columns to match top leaderboard
-    bottom_gyms_display = bottom_gyms.rename(columns={
-        "store_nbr": "Gym",
-        "prior": "Prior Year",
-        "current": "Current Year",
-        "target": "Target"
-    })
-    bottom_gyms_display["Performance %"] = (bottom_gyms["performance_pct"]*100).round(1).astype(str) + "%"
-
     st.write("Bottom 5 Gyms")
-    st.dataframe(
-        bottom_gyms_display[["Gym", "Prior Year", "Current Year", "Target", "Performance %"]],
-        width='stretch',
-        hide_index=True
-    )
+    st.dataframe(build_leaderboard(gym_summary, "store_nbr", "Gym", top_n=5, ascending=True), width='stretch', hide_index=True)
+
 # ------------------------------
 # PERSONAL TRAINING KPI TILES
 # ------------------------------
