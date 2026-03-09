@@ -442,13 +442,13 @@ district_pt_summary = calc_pt_summary_correct(df, "district")
 region_pt_summary = calc_pt_summary_correct(df, "region")
 
 # ------------------------------
-# Display as Streamlit leaderboards
+# Display leaderboards
 # ------------------------------
 col1, col2, col3 = st.columns(3)
 
 def display_pt_leaderboard(col, df, group_field, title):
     top_count = df[df["Performance"]].shape[0]
-    col.metric(f"{title} Exceeding Last Year", top_count)
+    col.metric(f"{title} Exceeding Last Year Pace", top_count)
     display_df = df.rename(columns={group_field: title})
     col.dataframe(display_df[[title, "prior", "current", "Improvement %", "Performance"]], width='stretch', hide_index=True)
 
