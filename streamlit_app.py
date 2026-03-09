@@ -177,7 +177,7 @@ with col1:
         }
     ))
     # Position target annotation below the current number
-    fig_gauge.add_annotation(x=0.5, y=0.0, text=f"Summer Target: {target_total:,}", showarrow=False, font=dict(size=15))
+    fig_gauge.add_annotation(x=0.5, y=-0.1, text=f"Summer Target: {target_total:,}", showarrow=False, font=dict(size=15))
     st.plotly_chart(fig_gauge, width='stretch')
 
 # Cumulative Growth
